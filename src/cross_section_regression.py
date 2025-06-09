@@ -1,164 +1,114 @@
-import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-import matplotlib.pyplot as plt
+
 
 def run_cross_sectional_regression(
     asset_returns: pd.Series,
     factor_loadings: pd.DataFrame,
-    weights: pd.Series = None,
-    robust: bool = True,
+    weights: pd.Series,
     huber_t: float = 1.345,
 ) -> pd.Series:
     """
-    Run a certian period of cross-sectional regression:
-        r_i = sum_k x_{i,k} * f_k + u_i
-    Optionally downweight outliers using Huber’s T norm.
+    Run a cross-sectional regression for one period using Huber's T norm.
+
+    r_i = sum_k x_{i,k} * f_k + u_i
 
     Parameters
     ----------
     asset_returns : pd.Series
-        Excess returns. Index = asset identifiers.
+        Asset excess returns, indexed by asset IDs.
     factor_loadings : pd.DataFrame
-        Exposures for the same period. Index = asset identifiers,
-        columns = factor names (e.g. ['F0', 'F1', ...]).
-    weights : pd.Series, optional
-        Cross-sectional weights (e.g. 1/σ² or market-cap).
-        Index = asset identifiers. If None, equal-weight = 1 for all.
-    robust : bool, default=True
-        If True, use statsmodels.RLM with Huber’s T to downweight outliers.
-        If False, use WLS (if weights given) or OLS otherwise.
+        Exposures for the same period, indexed by asset IDs.
+    weights : pd.Series
+        Cross-sectional weights, indexed by asset IDs.
     huber_t : float, default=1.345
-        Tuning constant for Huber’s T.
+        Huber's T tuning constant.
 
     Returns
     -------
     pd.Series
-        Estimated factor returns ˆf_k for that period.
-        Index = factor names (same as factor_loadings.columns).
+        Estimated factor returns, indexed by factor names.
     """
-   
-    #common_assets = asset_returns.index.intersection(factor_loadings.index)
-    #y = asset_returns.loc[common_assets].astype(float)
-    #X = factor_loadings.loc[common_assets].astype(float)
-
+    # Ensure matching indices
     if not asset_returns.index.equals(factor_loadings.index):
+        raise ValueError("Asset indices do not match between returns and exposures.")
 
-        raise ValueError(
-            "Asset indices not matched between factors and returns.\n"
-        )
-    
-    y = asset_returns.astype(float)
-    X = factor_loadings.astype(float)
+    # Convert to numpy arrays of floats
+    y = asset_returns.astype(float).to_numpy()
+    X = factor_loadings.astype(float).to_numpy()
+    w = weights.astype(float).to_numpy()
 
-    if weights is None:
-        w = pd.Series(1.0, index=factor_loadings.index)
-    else:
-        w = weights.astype(float)
+    # Robust regression via Huber's T
+    huber = sm.robust.norms.HuberT(t=huber_t)
+    model = sm.RLM(endog=y, exog=X, M=huber, weights=w)
+    results = model.fit()
 
-
-    if robust:
-        huber = sm.robust.norms.HuberT(t=huber_t)
-        model = sm.RLM(endog=y.values, exog=X.values, M=huber, weights=w.values)
-        results = model.fit()
-        params = results.params
-    else:
-        if weights is not None:
-            model = sm.WLS(endog=y.values, exog=X.values, weights=w.values)
-            results = model.fit()
-            params = results.params
-        else:
-            model = sm.OLS(endog=y.values, exog=X.values)
-            results = model.fit()
-            params = results.params
-
-    
-    return pd.Series(params, index=X.columns, name="factor_returns")
-
+    # Return a Series with factor names as index
+    return pd.Series(results.params, index=factor_loadings.columns, name="factor_returns")
 
 
 def run_monthly_factor_returns(
     returns_df: pd.DataFrame,
     exposures_df: pd.DataFrame,
-    weights_df: pd.DataFrame = None,
-    robust: bool = True,
+    weights_df: pd.DataFrame,
     huber_t: float = 1.345,
 ) -> pd.DataFrame:
     """
-    Loop over each month (column) in returns_df, run cross-sectional regression,
-    and collect the estimated factor returns in a DataFrame.
+    Compute factor returns for each period by calling run_cross_sectional_regression.
 
     Parameters
     ----------
     returns_df : pd.DataFrame
-        Asset excess returns. Shape = (n_assets, n_months).
-        Index = asset identifiers; columns = period identifiers (e.g. '2023-01').
+        Asset returns, rows=assets, cols=periods.
     exposures_df : pd.DataFrame
-        MultiIndex DataFrame of exposures.
-        Index = (month, asset); columns = factor names.
-    weights_df : pd.DataFrame, optional
-        MultiIndex DataFrame of cross-sectional weights (same index structure).
-        If None, equal-weight is used.
-    robust : bool, default=True
-        If True, uses RLM (Huber’s T). If False, WLS/OLS.
+        MultiIndex (period, asset) exposures, columns=factors.
+    weights_df : pd.DataFrame
+        MultiIndex (period, asset) weights.
     huber_t : float, default=1.345
-        Tuning constant for Huber’s T.
+        Huber's T tuning constant.
 
     Returns
     -------
     pd.DataFrame
-        Estimated factor returns for each period. 
-        Shape = (n_periods, n_factors). Index = periods; columns = factor names.
+        Factor returns for each period; rows=periods, cols=factors.
     """
-    periods = returns_df.columns.tolist()
-    factor_names = exposures_df.columns.tolist()
+    periods = list(returns_df.columns)
+    factor_names = list(exposures_df.columns)
     results = pd.DataFrame(index=periods, columns=factor_names, dtype=float)
 
     for period in periods:
-        
+        # Asset returns for this period
         r_slice = returns_df[period].dropna()
 
-        
-        try:
-            e_slice = exposures_df.loc[period]
-        except KeyError:
-            
-            e_slice = exposures_df.xs(key=period, level=0)
-        
-        e_slice = e_slice.reindex(index=r_slice.index).dropna(how="any")
+        # Exposures for this period (always a DataFrame)
+        e_period_df = exposures_df.xs(period, level=0)
+        e_slice = e_period_df.reindex(r_slice.index).dropna(how="any")
 
-   
-        if weights_df is not None:
-            try:
-                w_slice = weights_df.loc[period].iloc[:, 0]
-            except KeyError:
-                w_slice = weights_df.xs(key=period, level=0).iloc[:, 0]
-            w_slice = w_slice.reindex(index=r_slice.index).dropna()
+        # Weights for this period
+        w_period_df = weights_df.xs(period, level=0)
+        if isinstance(w_period_df, pd.DataFrame):
+            w_ser = w_period_df.iloc[:, 0]
         else:
-            w_slice = None
+            w_ser = w_period_df
+        w_slice = w_ser.reindex(r_slice.index).dropna()
 
-      
-        if w_slice is not None:
-            common = r_slice.index.intersection(e_slice.index).intersection(w_slice.index)
-            r_cs = r_slice.loc[common]
-            e_cs = e_slice.loc[common]
-            w_cs = w_slice.loc[common]
-        else:
-            common = r_slice.index.intersection(e_slice.index)
-            r_cs = r_slice.loc[common]
-            e_cs = e_slice.loc[common]
-            w_cs = None
+        # Align indices
+        common_index = (
+            r_slice.index
+            .intersection(list(e_slice.index))
+            .intersection(list(w_slice.index))
+        )
+        r_cs = r_slice.loc[common_index]
+        e_cs = pd.DataFrame(e_slice.loc[common_index])
+        w_cs = w_slice.loc[common_index]
 
-
+        # Get factor returns for this period
         facret = run_cross_sectional_regression(
             asset_returns=r_cs,
             factor_loadings=e_cs,
             weights=w_cs,
-            robust=robust,
             huber_t=huber_t,
         )
-
-   
-        results.loc[period, facret.index] = facret.values
+        results.loc[period, :] = facret.values
 
     return results
