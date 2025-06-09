@@ -8,6 +8,9 @@ jobs:
   run-unit-tests:
     runs-on: ubuntu-latest
 
+    env:
+      PYTHONPATH: "${{ github.workspace }}/src"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
