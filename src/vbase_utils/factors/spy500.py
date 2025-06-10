@@ -1,12 +1,17 @@
-
+# spy500.py
 from __future__ import annotations
+
+import argparse
 import pandas as pd
-import yfinance as yf
 import numpy as np
 
 
+# ----------------------------------------------------------------------
+# Public helpers
+# ----------------------------------------------------------------------
+
 def fetch_constituents() -> list[str]:
-    """Pull the S&P 500 tickers from Wikipedia."""
+    """Return a list of S&P-500 tickers scraped from Wikipedia."""
     wiki = pd.read_html(
         "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     )[0]
@@ -16,7 +21,8 @@ def fetch_constituents() -> list[str]:
 def compute_returns_from_csv(path: str) -> pd.DataFrame:
     """
     Load a local CSV of daily returns.
-    Must include a 'SPY' column and have 'date' as the index.
+    The CSV must have: a 'date' column      → index
+                      and a 'SPY' return column.
     """
     df = pd.read_csv(path, index_col="date", parse_dates=True)
     if "SPY" not in df.columns:
@@ -28,9 +34,19 @@ def compute_returns_from_yfinance(
     tickers: list[str], start: str, end: str
 ) -> pd.DataFrame:
     """
-    Download adjusted close prices via yfinance and convert to daily returns.
-    Automatically fixes tickers like BRK.B → BRK-B.
+    Download adjusted-close prices with yfinance and convert to daily returns.
+
+    NOTE: We import yfinance *here* so that the rest of the module can be
+    imported even when yfinance is not installed (e.g., in CI test runs).
     """
+    try:
+        import yfinance as yf                                   # ← lazy-import
+    except ImportError as exc:
+        raise ImportError(
+            "`yfinance` is required only for `compute_returns_from_yfinance` "
+            "(pip install yfinance)."
+        ) from exc
+
     yf_tickers = [t.replace(".", "-") for t in tickers] + ["SPY"]
     raw = yf.download(
         yf_tickers,
@@ -38,37 +54,33 @@ def compute_returns_from_yfinance(
         end=end,
         progress=False,
         group_by="ticker",
-        auto_adjust=True
+        auto_adjust=True,
     )
-   
-    prices = pd.DataFrame({
-        orig: raw[clean]["Close"]
-        for orig, clean in zip(tickers + ["SPY"], yf_tickers)
-    }, index=raw.index)
+
+    prices = pd.DataFrame(
+        {orig: raw[clean]["Close"] for orig, clean in zip(tickers + ["SPY"], yf_tickers)},
+        index=raw.index,
+    )
+
     rets = prices.pct_change().dropna(how="all")
     if "SPY" not in rets.columns:
         raise KeyError("Downloaded data missing SPY returns")
     return rets
 
 
-def compute_betas(
-    rets: pd.DataFrame, tickers: list[str]
-) -> pd.Series:
+def compute_betas(rets: pd.DataFrame, tickers: list[str]) -> pd.Series:
     """
-    Compute each ticker’s beta versus SPY:
-        βᵢ = Cov(rᵢ, r_SPY) / Var(r_SPY)
+    βᵢ = Cov(rᵢ, r_SPY) / Var(r_SPY)   for each ticker i.
     """
     var_spy = rets["SPY"].var()
-    covs    = rets.cov().loc[tickers, "SPY"]
-    betas   = (covs / var_spy).rename("beta")
+    covs = rets.cov().loc[tickers, "SPY"]
+    betas = (covs / var_spy).rename("beta")
     betas.index = tickers
     return betas
 
 
 def build_sector_dummies(tickers: list[str]) -> pd.DataFrame:
-    """
-    One-hot encode each ticker’s GICS1 sector by scraping Wikipedia.
-    """
+    """One-hot encode each ticker’s GICS1 sector, scraped from Wikipedia."""
     wiki = (
         pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
           .set_index("Symbol")
@@ -77,36 +89,33 @@ def build_sector_dummies(tickers: list[str]) -> pd.DataFrame:
     return pd.get_dummies(sectors, prefix="sector")
 
 
-def build_spy500_panel(
-    rets: pd.DataFrame,
-    tickers: list[str]
-) -> pd.DataFrame:
+def build_spy500_panel(rets: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     """
-    Combine betas and sector dummies into one wide DataFrame:
-        index = ticker
-        columns = ['beta', 'sector_<name>', ...]
+    Combine betas and sector dummies into a single DataFrame:
+
+        index   → ticker
+        columns → ['beta', 'sector_<name>', …]
     """
-    betas   = compute_betas(rets, tickers)
+    betas = compute_betas(rets, tickers)
     sectors = build_sector_dummies(tickers)
     return pd.concat([betas, sectors], axis=1)
 
 
-def main():
-    """CLI entry point: build and save the SPY500 factor panel."""
-    import argparse
+# ----------------------------------------------------------------------
+# CLI entry point
+# ----------------------------------------------------------------------
 
-    parser = argparse.ArgumentParser(description="Build SPY500 factor panel")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--csv", help="Path to a returns CSV file (must include SPY column)"
-    )
-    group.add_argument(
-        "--yf", nargs=2, metavar=("START","END"),
-        help="Use yfinance to fetch returns; specify start/end dates"
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build SPY-500 factor panel")
+    grp = parser.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--csv", help="Path to a returns CSV (must include SPY column)")
+    grp.add_argument(
+        "--yf", nargs=2, metavar=("START", "END"),
+        help="Fetch returns with yfinance; supply start/end dates (YYYY-MM-DD)",
     )
     parser.add_argument(
         "--out", required=True,
-        help="Path where the output parquet panel will be written"
+        help="Destination .parquet file for the factor panel",
     )
     args = parser.parse_args()
 
