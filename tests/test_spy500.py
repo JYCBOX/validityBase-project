@@ -114,4 +114,4 @@ def test_build_spy500_panel_integration(tmp_path, monkeypatch):
     
     assert pytest.approx(panel.loc["AAA", "beta"], rel=1e-6) == 2.0
     
-    assert pytest.approx(panel.loc["BBB", "beta"], abs=1e-6) == 0.0
+    assert pytest.approx(panel.loc["BBB", "beta"], abs=1e-6) == 0.0 
