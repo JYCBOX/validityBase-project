@@ -8,7 +8,7 @@ jobs:
   run-unit-tests:
     runs-on: ubuntu-latest
 
-    # 1) Ensure Python can load your src/vbase_utils package
+    # 1) Tell Python to look inside your src/ folder for vbase_utils
     env:
       PYTHONPATH: "${{ github.workspace }}/src:${{ env.PYTHONPATH }}"
 
@@ -24,14 +24,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install your package so imports work
+          # 2) Install your package in editable mode so vbase_utils is available
           pip install -e .
-          # Then install all dev requirements (pytest, yfinance, etc.)
+          # 3) Then install everything else (pytest, yfinance, etc.)
           pip install -r requirements_dev.txt
 
       - name: Run unit tests
         run: |
-          # Now your vbase_utils code is importable
           python -m unittest discover -s tests
-          # Or, if you prefer pytest:
-          # pytest
