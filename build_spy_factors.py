@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import sys
 
 WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
@@ -12,14 +12,15 @@ def fetch_sp500_tickers_and_sectors():
     return tickers, sectors
 
 def sanitize_tickers(tickers):
-    """Replace dots with dashes for yfinance compatibility."""
+    """Replace dots with dashes for file/column compatibility."""
     return [t.replace(".", "-") for t in tickers]
 
-def download_adjusted_prices(tickers, start="2018-01-01", end="2025-06-10"):
-    """Download adjusted close prices for given tickers from Yahoo Finance."""
-    raw = yf.download(tickers, start=start, end=end, progress=False, group_by="ticker", auto_adjust=True)
-    close_prices = pd.DataFrame({t: raw[t]["Close"] for t in tickers}, index=raw.index)
-    return close_prices
+def load_prices(filepath):
+    """
+    Load adjusted close prices from a CSV file.
+    Expects: rows = dates (index), columns = tickers (SPY + S&P 500)
+    """
+    return pd.read_csv(filepath, index_col=0, parse_dates=True)
 
 def compute_daily_returns(prices):
     """Compute daily percentage returns."""
@@ -33,24 +34,32 @@ def compute_betas(returns, market_col="SPY", tickers=None):
     cov = returns.cov().loc[tickers, market_col]
     return (cov / market_var).rename("beta")
 
-def build_factor_panel(start="2018-01-01", end="2025-06-10"):
-    """Construct the full factor panel with beta and sector dummies."""
+def build_factor_panel(prices_df):
+    """Build factor panel with trailing beta to SPY and sector dummies."""
     tickers_orig, sector_series = fetch_sp500_tickers_and_sectors()
-    tickers_yf = sanitize_tickers(tickers_orig)
-    all_tickers = tickers_yf + ["SPY"]
+    tickers_sanitized = sanitize_tickers(tickers_orig)
+    all_expected = tickers_sanitized + ["SPY"]
 
-    prices = download_adjusted_prices(all_tickers, start, end)
-    returns = compute_daily_returns(prices)
+    # Verify tickers exist in data
+    missing = [t for t in all_expected if t not in prices_df.columns]
+    if missing:
+        raise ValueError(f"Missing tickers in price data: {missing}")
 
-    betas = compute_betas(returns, market_col="SPY", tickers=tickers_yf)
-    betas.index = tickers_orig  # restore original tickers with dots
+    returns = compute_daily_returns(prices_df)
+    betas = compute_betas(returns, market_col="SPY", tickers=tickers_sanitized)
+    betas.index = tickers_orig  # Restore original symbols
 
     sector_dummies = pd.get_dummies(sector_series, prefix="sector")
-
-    factor_panel = pd.concat([betas, sector_dummies], axis=1)
-    return factor_panel
+    return pd.concat([betas, sector_dummies], axis=1)
 
 if __name__ == "__main__":
-    panel = build_factor_panel()
+    if len(sys.argv) != 2:
+        print("Usage: python build_spy_factors.py <path_to_prices_csv>")
+        sys.exit(1)
+
+    filepath = sys.argv[1]
+    prices_df = load_prices(filepath)
+    panel = build_factor_panel(prices_df)
+
     print("Done. Panel shape:", panel.shape)
     print(panel.head(10))
