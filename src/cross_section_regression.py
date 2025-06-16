@@ -33,6 +33,7 @@ def run_cross_sectional_regression(
         Estimated factor returns, indexed by factor names.
     """
 
+    # input validation
     if asset_returns.empty:
         raise ValueError("asset_returns is empty")
     if factor_loadings.empty:
@@ -40,7 +41,7 @@ def run_cross_sectional_regression(
     if weights.empty:
         raise ValueError("weights is empty")
     
-    # Ensure matching indices
+    # ensure matching indices
     if not asset_returns.index.equals(factor_loadings.index):
         raise ValueError("Asset indices do not match between returns and exposures.")
 
@@ -48,26 +49,19 @@ def run_cross_sectional_regression(
         raise ValueError("Asset indices do not match between returns and weights.")
     
     y = asset_returns.astype(float)
-    med = y.median()
-    abs_dev = (y - med).abs()
-    mad = abs_dev.median()
-    if mad > 0:
-        thr = huber_t * mad
-        mask = abs_dev <= thr
-        if mask.sum() >= factor_loadings.shape[1]:
-            y = y.loc[mask]
-            factor_loadings = factor_loadings.loc[mask]
-            weights = weights.loc[mask]
+    X = factor_loadings.astype(float)
+    w = weights.astype(float)
 
-    X = factor_loadings.astype(float).to_numpy()
-    w = weights.astype(float).to_numpy()
+    sw = np.sqrt(w)
+    y_w = y * sw
+    X_w = X.mul(sw, axis=0)
 
-    # Robust regression via Huber's T
+    # robust regression via Huber's T
     huber = sm.robust.norms.HuberT(t=huber_t)
-    model = sm.RLM(endog=y, exog=X, M=huber, weights=w)
+    model = sm.RLM(endog=y_w.to_numpy(), exog=X_w.to_numpy(), M=huber)
     results = model.fit()
 
-    # Return a Series with factor names as index
+    # return a Series with factor names as index
     return pd.Series(results.params, index=factor_loadings.columns, name="factor_returns")
 
 
@@ -89,7 +83,7 @@ def calculate_factor_returns(
     if weights_df.empty:
         raise ValueError("weights_df is empty")
 
-    # modify df's index
+    # normalize indices
     returns_df = returns_df.copy()
     returns_df.index = pd.to_datetime(returns_df.index)
     lvl0 = pd.to_datetime(exposures_df.index.levels[0])
@@ -100,6 +94,7 @@ def calculate_factor_returns(
     weights_df.index = weights_df.index.set_levels(lvl0_w, level=0)
 
     # 2. pivot：row=period，col=(factor, asset) and (weight_col, asset)
+    factor_names = exposures_df.columns.tolist()
     exposures_wide = exposures_df.unstack(level="asset")
     weights_wide  = weights_df.unstack(level="asset")
 
@@ -114,15 +109,14 @@ def calculate_factor_returns(
 
         ts = masked["returns"].index[-1]
 
-        if ts not in masked["exposures"].index:
-            return {"factor_returns": pd.Series(data=np.nan)}
-
         # extract returns
         r_all = masked["returns"].iloc[-1]           # Series, index=assets
         r_slice = r_all.dropna()
 
         # extract exposures
         exp_ser = masked["exposures"].loc[ts]        # Series, MultiIndex=(factor,asset)
+        if exp_ser.isna().all():
+            return {"factor_returns": pd.Series(np.nan, index=factor_names)}
         exp_df  = exp_ser.unstack(level=0)           # DataFrame index=asset, cols=factors
         e_slice = exp_df.reindex(r_slice.index).dropna(how="any")
 
@@ -133,6 +127,8 @@ def calculate_factor_returns(
         # aline
         common = [asset for asset in r_slice.index
                   if asset in e_slice.index and asset in w_slice.index]
+        if not common:
+            return {"factor_returns": pd.Series(np.nan, index=factor_names)}
 
         asset_returns, e_cs, w_cs = r_slice.loc[common], e_slice.loc[common], w_slice.loc[common]
         factor_loadings = cast(pd.DataFrame, e_cs)
@@ -149,5 +145,8 @@ def calculate_factor_returns(
 
     # call sim
     out = sim(data=data, callback=callback, time_index=returns_df.index)
+    result_df = out["factor_returns"]
+    if not isinstance(result_df, pd.DataFrame):
+        result_df = cast(pd.DataFrame, result_df)
 
-    return cast(pd.DataFrame, out["factor_returns"])
+    return result_df
