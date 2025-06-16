@@ -24,6 +24,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run pytest suite
+      - name: Run unittest
         run: |
           python -m unittest discover -s tests -v
