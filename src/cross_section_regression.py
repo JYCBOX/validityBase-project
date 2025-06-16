@@ -115,8 +115,6 @@ def calculate_factor_returns(
 
         # extract exposures
         exp_ser = masked["exposures"].loc[ts]        # Series, MultiIndex=(factor,asset)
-        if exp_ser.isna().all():
-            return {"factor_returns": pd.Series(np.nan, index=factor_names)}
         exp_df  = exp_ser.unstack(level=0)           # DataFrame index=asset, cols=factors
         e_slice = exp_df.reindex(r_slice.index).dropna(how="any")
 
