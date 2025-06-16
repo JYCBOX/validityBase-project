@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import statsmodels.api as sm
 from typing import Dict, Union, cast
 
@@ -12,9 +13,8 @@ def run_cross_sectional_regression(
     huber_t: float = 1.345,
 ) -> pd.Series:
     """
-    Run a cross-sectional regression for one period using Huber's T norm.
-
-    r_i = sum_k x_{i,k} * f_k + u_i
+    Run a cross-sectional regression for one period using Huber's T norm,
+    with pre-trimming of extreme outliers to ensure robustness.
 
     Parameters
     ----------
@@ -32,15 +32,33 @@ def run_cross_sectional_regression(
     pd.Series
         Estimated factor returns, indexed by factor names.
     """
+
+    if asset_returns.empty:
+        raise ValueError("asset_returns is empty")
+    if factor_loadings.empty:
+        raise ValueError("factor_loadings is empty")
+    if weights.empty:
+        raise ValueError("weights is empty")
+    
     # Ensure matching indices
     if not asset_returns.index.equals(factor_loadings.index):
         raise ValueError("Asset indices do not match between returns and exposures.")
 
     if not asset_returns.index.equals(weights.index):
         raise ValueError("Asset indices do not match between returns and weights.")
+    
+    y = asset_returns.astype(float)
+    med = y.median()
+    abs_dev = (y - med).abs()
+    mad = abs_dev.median()
+    if mad > 0:
+        thr = huber_t * mad
+        mask = abs_dev <= thr
+        if mask.sum() >= factor_loadings.shape[1]:
+            y = y.loc[mask]
+            factor_loadings = factor_loadings.loc[mask]
+            weights = weights.loc[mask]
 
-    # Convert to numpy arrays of floats
-    y = asset_returns.astype(float).to_numpy()
     X = factor_loadings.astype(float).to_numpy()
     w = weights.astype(float).to_numpy()
 
@@ -63,6 +81,13 @@ def calculate_factor_returns(
     Calculate factor returns for each period by calling run_cross_sectional_regression,
     with `sim` function to drive the period loop automatically.
     """
+
+    if returns_df.empty:
+        raise ValueError("returns_df is empty")
+    if exposures_df.empty:
+        raise ValueError("exposures_df is empty")
+    if weights_df.empty:
+        raise ValueError("weights_df is empty")
 
     # modify df's index
     returns_df = returns_df.copy()
@@ -88,6 +113,9 @@ def calculate_factor_returns(
     ) -> Dict[str, Union[pd.DataFrame, pd.Series]]:
 
         ts = masked["returns"].index[-1]
+
+        if ts not in masked["exposures"].index:
+            return {"factor_returns": pd.Series(data=np.nan)}
 
         # extract returns
         r_all = masked["returns"].iloc[-1]           # Series, index=assets
