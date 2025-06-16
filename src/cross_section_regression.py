@@ -2,7 +2,7 @@ import pandas as pd
 import statsmodels.api as sm
 from typing import Dict, Union, cast
 
-from vbase_utils.sim import sim
+from src.sim import sim
 
 
 def run_cross_sectional_regression(

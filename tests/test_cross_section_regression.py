@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from vbase_utils.stats.cross_section_regression import (
+from src.cross_section_regression import (
     run_cross_sectional_regression,
     calculate_factor_returns,
 )
